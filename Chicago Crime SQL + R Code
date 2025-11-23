@@ -1,0 +1,238 @@
+# Install packages (run only once)
+# install.packages("bigrquery")
+# install.packages("dplyr")
+# install.packages("ggplot2")
+# install.packages("forecast")
+
+install.packages("bigrquery")
+install.packages("dplyr")
+install.packages("ggplot2")
+install.packages("forecast")
+
+library(bigrquery)
+library(dplyr)
+library(ggplot2)
+library(forecast)
+
+# ============================
+# BigQuery Setup
+# ============================
+project_id <- "Insert Your BigQuery Project ID Here"
+
+sql <- "
+SELECT
+  EXTRACT(YEAR FROM date) AS year,
+  primary_type,
+  COUNT(*) AS total_crimes
+FROM `bigquery-public-data.chicago_crime.crime`
+WHERE date IS NOT NULL
+GROUP BY year, primary_type
+ORDER BY year, primary_type
+"
+
+query_job <- bq_project_query(project_id, sql)
+crime_data <- bq_table_download(query_job)
+
+head(crime_data)
+
+# ============================
+# General Crime Trends
+# ============================
+ggplot(crime_data, aes(x = year, y = total_crimes, color = primary_type)) +
+  geom_line(size = 1) +
+  labs(title = "Chicago Crime Trends by Primary Type",
+       x = "Year",
+       y = "Total Crimes",
+       color = "Crime Type") +
+  theme_minimal()
+
+# ============================
+# Top 5 Crimes
+# ============================
+top_crimes <- crime_data %>%
+  group_by(primary_type) %>%
+  summarise(total = sum(total_crimes)) %>%
+  slice_max(order_by = total, n = 5) %>%
+  pull(primary_type)
+
+crime_data %>%
+  filter(primary_type %in% top_crimes) %>%
+  ggplot(aes(x = year, y = total_crimes, color = primary_type)) +
+  geom_line(size = 1) +
+  labs(title = "Top 5 Chicago Crime Types Over Time",
+       x = "Year", y = "Total Crimes",
+       caption = "Source: Chicago Data Portal") +
+  theme_minimal()
+
+# ============================
+# Bottom 5 Crimes
+# ============================
+bottom_crimes <- crime_data %>%
+  group_by(primary_type) %>%
+  summarise(total = sum(total_crimes)) %>%
+  slice_min(order_by = total, n = 5) %>%
+  pull(primary_type)
+
+crime_data %>%
+  filter(primary_type %in% bottom_crimes) %>%
+  ggplot(aes(x = year, y = total_crimes, color = primary_type)) +
+  geom_line(size = 1) +
+  labs(title = "Bottom 5 Chicago Crime Types Over Time",
+       x = "Year", y = "Total Crimes",
+       caption = "Source: Chicago Data Portal") +
+  theme_minimal()
+
+# ============================
+# Violent Crimes (multi-line)
+# ============================
+violent_crimes <- c("HOMICIDE", "BATTERY", "ROBBERY", "ASSAULT", "CRIMINAL SEXUAL ASSAULT")
+violent_data <- crime_data %>%
+  filter(primary_type %in% violent_crimes)
+
+ggplot(violent_data, aes(x = year, y = total_crimes, color = primary_type)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = "Chicago Violent Crime Trends Over Time",
+    x = "Year",
+    y = "Total Crimes",
+    color = "Crime Type",
+    caption = "Source: Chicago Data Portal") +
+  theme_minimal()
+
+# ============================
+# HOMICIDE Trends
+# ============================
+homicide_data <- filter(crime_data, primary_type == "HOMICIDE")
+
+# Linear Model
+ggplot(homicide_data, aes(x = year, y = total_crimes)) +
+  geom_line(color = "red", size = 1.2) +
+  geom_point(color = "red") +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linetype = "dashed") +
+  labs(
+    title = "Chicago Homicide Trend Over Time",
+    x = "Year", y = "Total Homicides",
+    caption = "Source: Chicago Data Portal") +
+  theme_minimal()
+
+# Loess Model
+loess_fit <- loess(total_crimes ~ year, homicide_data, span = 0.5)
+pred <- predict(loess_fit, newdata = homicide_data$year)
+rss <- sum((homicide_data$total_crimes - pred)^2)
+tss <- sum((homicide_data$total_crimes - mean(homicide_data$total_crimes))^2)
+pseudo_r2 <- 1 - rss/tss
+
+ggplot(homicide_data, aes(x = year, y = total_crimes)) +
+  geom_line(color = "red", size = 1.2) +
+  geom_point(color = "red") +
+  geom_smooth(method = "loess", span = 0.5, color = "blue") +
+  labs(title = "Chicago Homicide Trend (Loess Smoothing)",
+       subtitle = paste0("Pseudo R² = ", round(pseudo_r2, 3)),
+       x = "Year", y = "Total Homicides") +
+  theme_minimal()
+
+# Polynomial models
+lm_linear <- lm(total_crimes ~ year, homicide_data)
+lm_quadratic <- lm(total_crimes ~ poly(year, 2, raw = TRUE), homicide_data)
+lm_cubic <- lm(total_crimes ~ poly(year, 3, raw = TRUE), homicide_data)
+
+ggplot(homicide_data, aes(year, total_crimes)) +
+  geom_point(color = "red") +
+  geom_line(color = "gray") +
+  stat_smooth(method = "lm", formula = y ~ poly(x, 2, raw = TRUE),
+              color = "blue") +
+  labs(
+    title = "Chicago Homicide Trend (Quadratic Fit)",
+    subtitle = paste0("R² = ", round(summary(lm_quadratic)$r.squared, 3)),
+    x = "Year", y = "Total Homicides"
+  ) +
+  theme_minimal()
+
+# ============================
+# CRIMINAL SEXUAL ASSAULT Trends
+# ============================
+csa_data <- filter(crime_data, primary_type == "CRIMINAL SEXUAL ASSAULT")
+
+# Loess with pseudo R²
+loess_fit <- loess(total_crimes ~ year, csa_data, span = 0.5)
+pred <- predict(loess_fit, newdata = csa_data$year)
+rss <- sum((csa_data$total_crimes - pred)^2)
+tss <- sum((csa_data$total_crimes - mean(csa_data$total_crimes))^2)
+pseudo_r2 <- 1 - rss/tss
+
+ggplot(csa_data, aes(year, total_crimes)) +
+  geom_line(color = "purple", size = 1.2) +
+  geom_point(color = "purple") +
+  geom_smooth(method = "loess", span = 0.5, color = "blue") +
+  labs(
+    title = "Chicago Criminal Sexual Assault Trend",
+    subtitle = paste0("Pseudo R² = ", round(pseudo_r2, 3)),
+    x = "Year", y = "Total Criminal Sexual Assaults"
+  ) +
+  theme_minimal()
+
+# ARIMA forecast
+csa_ts <- ts(csa_data$total_crimes, start = min(csa_data$year), frequency = 1)
+fit_arima <- auto.arima(csa_ts)
+csa_forecast <- forecast(fit_arima, h = 6)
+
+autoplot(csa_forecast) +
+  labs(
+    title = "Chicago Criminal Sexual Assault Forecast (ARIMA)",
+    x = "Year",
+    y = "Total Criminal Sexual Assaults"
+  )
+
+# ============================
+# THEFT Trends
+# ============================
+theft_data <- filter(crime_data, primary_type == "THEFT")
+
+# Linear model with equation
+lm_fit <- lm(total_crimes ~ year, data = theft_data)
+r2 <- summary(lm_fit)$r.squared
+coeffs <- coef(lm_fit)
+eq <- paste0("y = ", round(coeffs[2], 2), "x + ", round(coeffs[1], 2))
+
+ggplot(theft_data, aes(year, total_crimes)) +
+  geom_line(color = "red") +
+  geom_point(color = "red") +
+  geom_smooth(method = "lm", linetype = "dashed", color = "blue") +
+  labs(
+    title = "Chicago Theft Trend Over Time",
+    subtitle = paste0("R² = ", round(r2, 3)),
+    x = "Year", y = "Total Thefts"
+  ) +
+  annotate("text", x = min(theft_data$year), y = max(theft_data$total_crimes),
+           label = eq, hjust = -2, color = "blue") +
+  theme_minimal()
+
+# ============================
+# ASSAULT Trends
+# ============================
+assault_data <- filter(crime_data, primary_type == "ASSAULT")
+
+ggplot(assault_data, aes(year, total_crimes)) +
+  geom_line(color = "red") +
+  geom_point(color = "red") +
+  labs(
+    title = "Chicago Assault Trend Over Time",
+    x = "Year", y = "Total Assaults"
+  ) +
+  theme_minimal()
+
+# ============================
+# PROSTITUTION Trends
+# ============================
+prostitution_data <- filter(crime_data, primary_type == "PROSTITUTION")
+
+ggplot(prostitution_data, aes(year, total_crimes)) +
+  geom_line(color = "red", size = 1.2) +
+  geom_point(color = "red") +
+  labs(
+    title = "Chicago Prostitution Trend Over Time",
+    x = "Year",
+    y = "Total Prostitution",
+    caption = "Source: Chicago Data Portal") +
+  theme_minimal()
